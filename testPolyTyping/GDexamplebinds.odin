@@ -4,18 +4,40 @@ package main
 import "base:runtime"
 import sics "base:intrinsics"
 import "core:fmt"
+import GDW "GDWrapper"
+import GDE "GDWrapper/gdextension"
 
 main :: proc() {
 
-    createdFunc:= bindNoReturn2(testproc)
-    fmt.println("proc returndd?", createdFunc)
+    value:i64= 20
     myClassInstance: GDExample
-    value:int= 20
+    createdFunc, othercallback:= bindNoReturn2(testproc)
+    //createdFunc= bindNoReturn2(testproc)
+    fmt.println("proc returndd? 1", createdFunc)
+    createdFunc(cast(rawptr)&myClassInstance, cast(rawptr)&value)
+    createdFunc, othercallback= bindNoReturn2(testproc)
+    fmt.println("proc returndd? 2", createdFunc)
     createdFunc(cast(rawptr)&myClassInstance, cast(rawptr)&value)
 
-    createdFunc0:= bindNoReturn2(testproc0)
+    createdFunc0, othercallback0:= bindNoReturn2(testproc0)
     fmt.println("proc returndd?", createdFunc0)
     createdFunc0(cast(rawptr)&myClassInstance, cast(rawptr)&value)
+    bindNoReturn2(testproc1)
+
+    variantptr: rawptr
+    value = fromvariant(&variantptr, type_of(value))
+    fmt.println(value)
+    fromvariant_P(&variantptr, &value)
+    fmt.println(value)
+    fmt.println(createdFunc)
+    fmt.println(createdFunc0)
+
+    fmt.println("testproc", testproc)
+    bindtodind(testproc)
+    fmt.println("testproc0", testproc0)
+    bindtodind(testproc0)
+    fmt.println("testproc1", testproc1)
+    bindtodind(testproc1)
 }
 
 //Defines things like variables, methods, class names. It's a unique ID generated from a string which will be used to match with the correct thing on Godot side.
@@ -47,52 +69,715 @@ GDExample :: struct{
 }
 
 
-testproc :: proc(classptr: ^GDExample, arg0: int) {
+testproc :: proc "c" (classptr: ^GDExample, arg0: i64) {
+    context = runtime.default_context()
     //testproc
     fmt.println("test proc fired")
     classptr.amplitude+=20
     fmt.println(classptr.amplitude)
 }
 
-testproc0 :: proc(classptr: ^GDExample) {
+testproc0 :: proc "c" (classptr: ^GDExample) {
+    context = runtime.default_context()
     fmt.println("Do something with no variables from Godot.")
+}
+testproc1 :: proc "c" (classptr: ^GDExample) -> f32 {
+    context = runtime.default_context()
+    fmt.println("Do something with no variables from Godot.")
+    return 32
+}
+
+bindtodind:: proc($T: $P) {
+    context = runtime.default_context()
+
+    fmt.println("function passed to bindtodind: ", T)
+    callback0, call1:= bindNoReturn2(T)
+
 }
 
 //Send callbacks to Godot. For testing I added the return, but this return should go to Godot for it to send back.
-bindNoReturn2 :: proc($T: $P) -> ExtensionClassMethodPtrCall where sics.type_is_proc(P)  {
+bindNoReturn2 :: proc($T: $P, names: ..cstring) -> (ExtensionClassMethodPtrCall, proc "c" (receivedStruct: rawptr, p_instance: rawptr, p_args: [^]rawptr,
+                                    p_argument_count: int, r_return: rawptr, r_error: ^GDE.GDExtensionCallError)) where sics.type_is_proc(P)  {
     context = runtime.default_context()
     argcount:: sics.type_proc_parameter_count(P)
+    argT0 :: sics.type_proc_parameter_type(P, 0)
     
+    fmt.println("my argcount: ",argcount)
+    fmt.println("Bind function", T)
     when argcount == 1 {
-        arg0 :: sics.type_proc_parameter_type(P, 0)
         godotCallback0 :: proc "c" (receivedStruct: rawptr, value: rawptr){
             context = runtime.default_context()
 
             func := cast(P)T
-            func(cast(arg0)receivedStruct)
+            func(cast(argT0)receivedStruct)
+        }
+        call_1float_arg_no_ret :: proc "c" (receivedStruct: rawptr, p_instance: rawptr, p_args: [^]rawptr,
+                                    p_argument_count: int, r_return: rawptr, r_error: ^GDE.GDExtensionCallError) {
+    
+            context = runtime.default_context()
+            //fmt.println("call 1arg ret 0")
+            if p_argument_count < argcount-1 {
+                r_error.error = .GDEXTENSION_CALL_ERROR_TOO_FEW_ARGUMENTS
+                r_error.expected = argcount
+                fmt.println("error small")
+                return
+            }
+            if p_argument_count > argcount-1 {
+                r_error.error = .GDEXTENSION_CALL_ERROR_TOO_MANY_ARGUMENTS
+                r_error.expected = argcount
+                fmt.println("error big")
+                return
+            }
+            
+            gdTypeList:= [argcount-1]GDE.GDExtensionVariantType {}
+            
+            variantTypeCheck(gdTypeList[:], p_args[:], r_error)
+
+            arg1: = 32
+            
+            func := cast(P)T
+            func(cast(argT0)receivedStruct)
+        }
+
+        
+        //Another binding function with GD.Variant to type conversions before making the function call via pointer.
+        //Pass pointers to functions created as well as name strings to Godot's registry.
+    return godotCallback0, call_1float_arg_no_ret
+
+    } else {
+        fmt.println("Some arg count")
+        argT1 :: sics.type_proc_parameter_type(P, 1)
+        when argcount == 2 {
+        godotCallback :: proc "c" (receivedStruct: rawptr, value: rawptr){
+            context = runtime.default_context()
+            fmt.println("Some arg count")
+
+            variant: GDE.GDExtensionVariantPtr
+            fmt.println("return from typechecker",fromvariant(&variant, argT1))
+            
+            typeList : [argcount-1]GDE.GDExtensionVariantType = {typetoenum(argT1)}
+            //nil is not a type so we cannot align to nil and don't need to check for it. I guess?
+            type_offset : int : sics.type_variant_index_of(typeUnion, argT1) + 1
+            fmt.println(cast(GDE.GDExtensionVariantType)type_offset)
+
+            gdTypeList:= [argcount-1]GDE.GDExtensionVariantType {typetoenum(argT1)}
+
+            args: [^]rawptr
+            r_error: GDE.GDExtensionCallError
+
+            variantTypeCheck(gdTypeList[:], args[:], &r_error)
+
+            fmt.println("type to enum: ",typetoenum(argT1))
+
+            
+
+            func := cast(P)T
+            func(cast(argT0)receivedStruct,  (cast(^argT1)value)^)
+        }
+        call_1float_arg_no_ret :: proc "c" (receivedStruct: rawptr, p_instance: rawptr, p_args: [^]rawptr,
+                                    p_argument_count: int, r_return: rawptr, r_error: ^GDE.GDExtensionCallError) {
+    
+            context = runtime.default_context()
+            //fmt.println("call 1arg ret 0")
+            if p_argument_count < argcount-1 {
+                r_error.error = .GDEXTENSION_CALL_ERROR_TOO_FEW_ARGUMENTS
+                r_error.expected = argcount
+                fmt.println("error small")
+                return
+            }
+            if p_argument_count > argcount-1 {
+                r_error.error = .GDEXTENSION_CALL_ERROR_TOO_MANY_ARGUMENTS
+                r_error.expected = argcount
+                fmt.println("error big")
+                return
+            }
+            
+            gdTypeList:= [argcount-1]GDE.GDExtensionVariantType {typetoenum(argT1)}
+            
+            variantTypeCheck(gdTypeList[:], p_args[:], r_error)
+
+            arg1: argT1 = 32
+            
+            func := cast(P)T
+            func(cast(argT0)receivedStruct, arg1)
         }
         //Another binding function with GD.Variant to type conversions before making the function call via pointer.
         //Pass pointers to functions created as well as name strings to Godot's registry.
-    return godotCallback0
-
-    } else when argcount == 2{
-        
-        //index:: sics.type_proc_parameter_count(P)-2
-        //index1:: sics.type_proc_parameter_count(P)-1
-        arg0 :: sics.type_proc_parameter_type(P, 0)
-        arg1 :: sics.type_proc_parameter_type(P, 1)
+    return godotCallback, call_1float_arg_no_ret
+    } else {
+        argT2 :: sics.type_proc_parameter_type(P, 2)
+        when argcount == 3 {
         
         godotCallback :: proc "c" (receivedStruct: rawptr, value: rawptr){
             context = runtime.default_context()
 
+            variant: GDE.GDExtensionVariantPtr
+            arg1: int;
+            fmt.println("return from typechecker",fromvariant(&variant, arg1))
+
             func := cast(P)T
-            func(cast(arg0)receivedStruct, (cast(^arg1)value)^)
+            func(cast(argT0)receivedStruct,  (cast(^argT1)value)^, (cast(^argT2)value1)^)
+        }
+        call_1float_arg_no_ret :: proc "c" (receivedStruct: rawptr, p_instance: rawptr, p_args: [^]rawptr,
+                                    p_argument_count: int, r_return: rawptr, r_error: ^GDE.GDExtensionCallError) {
+    
+            context = runtime.default_context()
+            //fmt.println("call 1arg ret 0")
+            if p_argument_count < argcount-1 {
+                r_error.error = .GDEXTENSION_CALL_ERROR_TOO_FEW_ARGUMENTS
+                r_error.expected = argcount
+                fmt.println("error small")
+                return
+            }
+            if p_argument_count > argcount-1 {
+                r_error.error = .GDEXTENSION_CALL_ERROR_TOO_MANY_ARGUMENTS
+                r_error.expected = argcount
+                fmt.println("error big")
+                return
+                    }
+            
+            typeList : [argcount-1]GDE.GDExtensionVariantType = {GDW.api.variantGetType(p_args[1])}
+            variantTypeCheck(gdTypeList[:], args[:], &r_error)
+
+            func := cast(P)T
+            func(cast(argT0)receivedStruct, arg1)
         }
         //Another binding function with GD.Variant to type conversions before making the function call via pointer.
         //Pass pointers to functions created as well as name strings to Godot's registry.
-    return godotCallback
-    } 
+    return godotCallback, call_1float_arg_no_ret
+    } else {#panic("RIP too many args in ")}
 
+    }
+}}
+
+
+variantTypeCheck :: proc(typeList: []GDE.GDExtensionVariantType, argList: [^]rawptr, r_error: ^GDE.GDExtensionCallError) -> (error: GDE.GDExtensionCallErrorType) {
+    error = .GDEXTENSION_CALL_OK
+    for type, index in typeList {
+        //if type != GDW.api.variantGetType(argList[index]) {
+        //    r_error.error = .GDEXTENSION_CALL_ERROR_INVALID_ARGUMENT
+        //    r_error.expected = i32(type)
+        //    fmt.println("error wrong type")
+        //    return
+        //}
+    }
+    return
+}
+
+
+fromvariant :: proc(variant: ^GDE.GDExtensionVariantPtr, $T: typeid) -> T {
+    context = runtime.default_context()
+
+    fmt.println("getting variant")
+    ret: T
+    when T == GDE.Bool{
+        @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+        //if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.BOLL); fmt.println("int construct set")}
+        //construct := GDW.api.getVariantToTypeConstuctor(.BOOL)
+        //construct(&ret, variant)
+        ret = 64
+    } else when T == GDE.Int {
+        @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+        //if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.FLOAT); fmt.println("int construct set")}
+        //construct := GDW.api.getVariantToTypeConstuctor(.INT)
+        //construct(&ret, variant)
+        ret = 64
+    } else when T == f32 {
+        @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+        //if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.FLOAT); fmt.println("int construct set")}
+        //construct := GDW.api.getVariantToTypeConstuctor(.FLOAT)
+        //construct(&ret, variant)
+        ret = 64
+    } else when T == String{
+        @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+        //if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.STRING); fmt.println("int construct set")}
+        //construct := GDW.api.getVariantToTypeConstuctor(.STRING)
+        //construct(&ret, variant)
+        ret = 64
+    }// else when T == Vector2{
+    //    @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+    //    if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.VECTOR2); fmt.println("int construct set")}
+    ///* math types */
+    //    //construct := GDW.api.getVariantToTypeConstuctor(.VECTOR2)
+    //    //construct(&ret, variant)
+    //    ret = 64
+    //} else when T == Vector2i{
+    //    @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+    //    if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.VECTOR2I); fmt.println("int construct set")}
+    //    //construct := GDW.api.getVariantToTypeConstuctor(.VECTOR2I)
+    //    //construct(&ret, variant)
+    //    ret = 64
+    //} else when T == Rect2 {
+    //    @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+    //    if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.RECT2); fmt.println("int construct set")}
+    //    //construct := GDW.api.getVariantToTypeConstuctor(.RECT2)
+    //    //construct(&ret, variant)
+    //    ret = 64
+    //} else when T == Rect2i {
+    //    @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+    //    if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.RECT2I); fmt.println("int construct set")}
+    //    //construct := GDW.api.getVariantToTypeConstuctor(.RECT2I)
+    //    //construct(&ret, variant)
+    //    ret = 64
+    //} else when T == Vector3 {
+    //    @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+    //    if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.VECTOR3); fmt.println("int construct set")}
+    //    //construct := GDW.api.getVariantToTypeConstuctor(.VECTOR3)
+    //    //construct(&ret, variant)
+    //    ret = 64
+    //} else when T == Vector3i {
+    //    @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+    //    if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.VECTOR3I); fmt.println("int construct set")}
+    //    //construct := GDW.api.getVariantToTypeConstuctor(.VECTOR3I)
+    //    //construct(&ret, variant)
+    //    ret = 64
+    //} else when T == Transform2d {
+    //    @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+    //    if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.TRANSFORM2D); fmt.println("int construct set")}
+    //    //construct := GDW.api.getVariantToTypeConstuctor(.TRANSFORM2D)
+    //    //construct(&ret, variant)
+    //    ret = 64
+    //} else when T == Vector4 {
+    //    @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+    //    if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.VECTOR4); fmt.println("int construct set")}
+    //    //construct := GDW.api.getVariantToTypeConstuctor(.VECTOR4)
+    //    //construct(&ret, variant)
+    //    ret = 64
+    //} else when T == Vector4i {
+    //    @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+    //    if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.VECTOR4I); fmt.println("int construct set")}
+    //    //construct := GDW.api.getVariantToTypeConstuctor(.VECTOR4I)
+    //    //construct(&ret, variant)
+    //    ret = 64
+    //} else when T == Plane {
+    //    @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+    //    if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.PLANE); fmt.println("int construct set")}
+    //    //construct := GDW.api.getVariantToTypeConstuctor(.PLANE)
+    //    //construct(&ret, variant)
+    //    ret = 64
+    //} else when T == Quaternion {
+    //    @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+    //    if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.QUATERNION); fmt.println("int construct set")}
+    //    //construct := GDW.api.getVariantToTypeConstuctor(.QUATERNION)
+    //    //construct(&ret, variant)
+    //    ret = 64
+    //} else when T == Aabb {
+    //    @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+    //    if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.AABB); fmt.println("int construct set")}
+    //    //construct := GDW.api.getVariantToTypeConstuctor(.AABB)
+    //    //construct(&ret, variant)
+    //    ret = 64
+    //} else when T == Basis {
+    //    @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+    //    if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.BASIS); fmt.println("int construct set")}
+    //    //construct := GDW.api.getVariantToTypeConstuctor(.BASIS)
+    //    //construct(&ret, variant)
+    //    ret = 64
+    //} else when T == Transform3d {
+    //    @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+    //    if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.TRANSFORM3D); fmt.println("int construct set")}
+    //    //construct := GDW.api.getVariantToTypeConstuctor(.TRANSFORM3D)
+    //    //construct(&ret, variant)
+    //    ret = 64
+    //} else when T == Projection {
+    //    @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+    //    if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.PROJECTION); fmt.println("int construct set")}
+    //    //construct := GDW.api.getVariantToTypeConstuctor(.PROJECTION)
+    //    //construct(&ret, variant)
+    //    ret = 64
+    //} else when T == Color{
+    ///* misc types */
+    //    @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+    //    if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.COLOR); fmt.println("int construct set")}
+    //    //construct := GDW.api.getVariantToTypeConstuctor(.COLOR)
+    //    //construct(&ret, variant)
+    //    ret = 64
+    //} else when T == StringName{
+    //    @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+    //    if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.STRING_NAME); fmt.println("int construct set")}
+    //    //construct := GDW.api.getVariantToTypeConstuctor(.STRING_NAME)
+    //    //construct(&ret, variant)
+    //    ret = 64
+    //}// else when T == NodePath{
+    //    @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+    //    if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.NODE_PATH); fmt.println("int construct set")}
+    //    //construct := GDW.api.getVariantToTypeConstuctor(.NODE_PATH)
+    //    //construct(&ret, variant)
+    //    ret = 64
+    //} else when T == Rid{
+    //    @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+    //    if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.RID); fmt.println("int construct set")}
+    //    //construct := GDW.api.getVariantToTypeConstuctor(.RID)
+    //    //construct(&ret, variant)
+    //    ret = 64
+    //} else when T == Object{
+    //    @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+    //    if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.OBJECT); fmt.println("int construct set")}
+    //    //construct := GDW.api.getVariantToTypeConstuctor(.OBJECT)
+    //    //construct(&ret, variant)
+    //    ret = 64
+    //} else when T == Callable{
+    //    @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+    //    if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.CALLABLE); fmt.println("int construct set")}
+    //    //construct := GDW.api.getVariantToTypeConstuctor(.CALLABLE)
+    //    //construct(&ret, variant)
+    //    ret = 64
+    //} else when T == Signal{
+    //    @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+    //    if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.SIGNAL); fmt.println("int construct set")}
+    //    //construct := GDW.api.getVariantToTypeConstuctor(.SIGNAL)
+    //    //construct(&ret, variant)
+    //    ret = 64
+    //} else when T == Dictionary{
+    //    @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+    //    if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.DICTIONARY); fmt.println("int construct set")}
+    //    //construct := GDW.api.getVariantToTypeConstuctor(.DICTIONARY)
+    //    //construct(&ret, variant)
+    //    ret = 64
+    //} else when T == Array{
+    //    @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+    //    if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.ARRAY); fmt.println("int construct set")}
+    //    //construct := GDW.api.getVariantToTypeConstuctor(.ARRAY)
+    //    //construct(&ret, variant)
+    //    ret = 64
+    //}
+    //
+    //
+    ///* typed arrays */
+    //when T == PByteArray{
+    //    @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+    //    if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.PACKED_BYTE_ARRAY); fmt.println("int construct set")}
+    //    //construct := GDW.api.getVariantToTypeConstuctor(.PACKED_BYTE_ARRAY)
+    //    //construct(&ret, variant)
+    //    ret = 64
+    //} else when T == PI32Array{
+    //    @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+    //    if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.PACKED_INT32_ARRAY); fmt.println("int construct set")}
+    //    //construct := GDW.api.getVariantToTypeConstuctor(.PACKED_INT32_ARRAY)
+    //    //construct(&ret, variant)
+    //    ret = 64
+    //} else when T == Pi64Array{
+    //    @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+    //    if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.PACKED_INT64_ARRAY); fmt.println("int construct set")}
+    //    //construct := GDW.api.getVariantToTypeConstuctor(.PACKED_INT64_ARRAY)
+    //    //construct(&ret, variant)
+    //    ret = 64
+    //} else when T == Pf32Array{
+    //    @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+    //    if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.PACKED_FLOAT32_ARRAY); fmt.println("int construct set")}
+    //    //construct := GDW.api.getVariantToTypeConstuctor(.PACKED_FLOAT32_ARRAY)
+    //    //construct(&ret, variant)
+    //    ret = 64
+    //} else when T == Pf64Array{
+    //    @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+    //    if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.PACKED_FLOAT64_ARRAY); fmt.println("int construct set")}
+    //    //construct := GDW.api.getVariantToTypeConstuctor(.PACKED_FLOAT64_ARRAY)
+    //    //construct(&ret, variant)
+    //    ret = 64
+    //} else when T == PStringArray{
+    //    @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+    //    if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.PACKED_STRING_ARRAY); fmt.println("int construct set")} //NOT ODIN STRING
+    //    //construct := GDW.api.getVariantToTypeConstuctor(.PACKED_STRING_ARRAY)
+    //    //construct(&ret, variant)
+    //    ret = 64
+    //} else when T == PVector2Array{
+    //    @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+    //    if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.PACKED_VECTOR2_ARRAY); fmt.println("int construct set")}
+    //    //construct := GDW.api.getVariantToTypeConstuctor(.PACKED_VECTOR2_ARRAY)
+    //    //construct(&ret, variant)
+    //    ret = 64
+    //} else when T == PVector3Array{
+    //    @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+    //    if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.PACKED_VECTOR3_ARRAY); fmt.println("int construct set")}
+    //    //construct := GDW.api.getVariantToTypeConstuctor(.PACKED_VECTOR3_ARRAY)
+    //    //construct(&ret, variant)
+    //    ret = 64
+    //} else when T == PColorArray{
+    //    @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+    //    if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.PACKED_COLOR_ARRAY); fmt.println("int construct set")}
+    //    //construct := GDW.api.getVariantToTypeConstuctor(.PACKED_COLOR_ARRAY)
+    //    //construct(&ret, variant)
+    //    ret = 64
+    //} else when T == PVector4Array{
+    //    @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+    //    if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.PACKED_VECTOR4_ARRAY); fmt.println("int construct set")}
+    //    //construct := GDW.api.getVariantToTypeConstuctor(.PACKED_VECTOR4_ARRAY)
+    //    //construct(&ret, variant)
+    //    ret = 64
+    //} else when T == VARIANT_MAX{
+    //    @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+    //    if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.VARIANT_MAX); fmt.println("int construct set")}
+    //    //construct := GDW.api.getVariantToTypeConstuctor(.VARIANT_MAX)
+    //    //construct(&ret, variant)
+    //    ret = 64
+    //}
+
+    return ret
+}
+
+fromvariant_P :: proc(variant: ^GDE.GDExtensionVariantPtr, ret: $T) where sics.type_is_pointer(T) {
+    context = runtime.default_context()
+    
+    //Could just do this, but if the goal is to prevent an extra allocation, this fails that goal.
+    //Doubling the code it is!!
+    //ret^ = fromvariant(variant, sics.type_elem_type(T))
+    when T == ^GDE.Bool{
+        @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+        //if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.BOLL); fmt.println("int construct set")}
+        //construct := GDW.api.getVariantToTypeConstuctor(.BOOL)
+        //construct(&ret, variant)
+        ret^ = 64
+    }else when T == ^i64 {
+        @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+        //if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.BOOL); fmt.println("int construct set")}
+        //construct := GDW.api.getVariantToTypeConstuctor(.INT)
+        //construct(&ret, variant)
+        ret^ = 64
+    }else when T == ^f32{
+        @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+        //if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.FLOAT); fmt.println("int construct set")}
+        //construct := GDW.api.getVariantToTypeConstuctor(.FLOAT)
+        //construct(&ret, variant)
+        ret^ = 64
+    }else when T == ^String{
+        @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+        //if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.STRING); fmt.println("int construct set")}
+        //construct := GDW.api.getVariantToTypeConstuctor(.STRING)
+        //construct(&ret, variant)
+        ret^ = 64
+    }else when T == ^Vector2{
+        @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+        //if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.VECTOR2); fmt.println("int construct set")}
+/* math types */
+        //construct := GDW.api.getVariantToTypeConstuctor(.VECTOR2)
+        //construct(&ret, variant)
+        ret^ = 64
+    }else when T == ^Vector2i{
+        @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+        //if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.VECTOR2I); fmt.println("int construct set")}
+        //construct := GDW.api.getVariantToTypeConstuctor(.VECTOR2I)
+        //construct(&ret, variant)
+        ret^ = 64
+    }else when T == ^Rect2{
+        @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+        //if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.RECT2); fmt.println("int construct set")}
+        //construct := GDW.api.getVariantToTypeConstuctor(.RECT2)
+        //construct(&ret, variant)
+        ret^ = 64
+    }else when T == ^Rect2i{
+        @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+        //if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.RECT2I); fmt.println("int construct set")}
+        //construct := GDW.api.getVariantToTypeConstuctor(.RECT2I)
+        //construct(&ret, variant)
+        ret^ = 64
+    }else when T == ^Vector3{
+        @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+        //if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.VECTOR3); fmt.println("int construct set")}
+        //construct := GDW.api.getVariantToTypeConstuctor(.VECTOR3)
+        //construct(&ret, variant)
+        ret^ = 64
+    }else when T == ^Vector3i{
+        @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+        //if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.VECTOR3I); fmt.println("int construct set")}
+        //construct := GDW.api.getVariantToTypeConstuctor(.VECTOR3I)
+        //construct(&ret, variant)
+        ret^ = 64
+    }else when T == ^Transform2d{
+        @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+        //if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.TRANSFORM2D); fmt.println("int construct set")}
+        //construct := GDW.api.getVariantToTypeConstuctor(.TRANSFORM2D)
+        //construct(&ret, variant)
+        ret^ = 64
+    }else when T == ^Vector4{
+        @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+        //if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.VECTOR4); fmt.println("int construct set")}
+        //construct := GDW.api.getVariantToTypeConstuctor(.VECTOR4)
+        //construct(&ret, variant)
+        ret^ = 64
+    }else when T == ^Vector4i{
+        @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+        //if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.VECTOR4I); fmt.println("int construct set")}
+        //construct := GDW.api.getVariantToTypeConstuctor(.VECTOR4I)
+        //construct(&ret, variant)
+        ret^ = 64
+    }else when T == ^Plane{
+        @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+        //if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.PLANE); fmt.println("int construct set")}
+        //construct := GDW.api.getVariantToTypeConstuctor(.PLANE)
+        //construct(&ret, variant)
+        ret^ = 64
+    }else when T == ^Quaternion{
+        @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+        //if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.QUATERNION); fmt.println("int construct set")}
+        //construct := GDW.api.getVariantToTypeConstuctor(.QUATERNION)
+        //construct(&ret, variant)
+        ret^ = 64
+    }else when T == ^Aabb{
+        @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+        //if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.AABB); fmt.println("int construct set")}
+        //construct := GDW.api.getVariantToTypeConstuctor(.AABB)
+        //construct(&ret, variant)
+        ret^ = 64
+    }else when T == ^Basis{
+        @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+        //if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.BASIS); fmt.println("int construct set")}
+        //construct := GDW.api.getVariantToTypeConstuctor(.BASIS)
+        //construct(&ret, variant)
+        ret^ = 64
+    }else when T == ^Transform3d{
+        @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+        //if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.TRANSFORM3D); fmt.println("int construct set")}
+        //construct := GDW.api.getVariantToTypeConstuctor(.TRANSFORM3D)
+        //construct(&ret, variant)
+        ret^ = 64
+    }else when T == ^Projection{
+        @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+        //if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.PROJECTION); fmt.println("int construct set")}
+        //construct := GDW.api.getVariantToTypeConstuctor(.PROJECTION)
+        //construct(&ret, variant)
+        ret^ = 64
+    }else when T == ^StringName{
+        @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+        //if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.STRING_NAME); fmt.println("int construct set")}
+        //construct := GDW.api.getVariantToTypeConstuctor(.STRING_NAME)
+        //construct(&ret, variant)
+        ret^ = 64
+    } else
+    
+
+    /* misc types */
+    when T == ^Color{
+
+        @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+        //if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.COLOR); fmt.println("int construct set")}
+        //construct := GDW.api.getVariantToTypeConstuctor(.COLOR)
+        //construct(&ret, variant)
+        ret^ = 64
+    }else when T == ^NodePath{
+        @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+        //if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.NODE_PATH); fmt.println("int construct set")}
+        //construct := GDW.api.getVariantToTypeConstuctor(.NODE_PATH)
+        //construct(&ret, variant)
+        ret^ = 64
+    }else when T == ^Rid{
+        @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+        //if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.RID); fmt.println("int construct set")}
+        //construct := GDW.api.getVariantToTypeConstuctor(.RID)
+        //construct(&ret, variant)
+        ret^ = 64
+    }else when T == ^Object{
+        @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+        //if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.OBJECT); fmt.println("int construct set")}
+        //construct := GDW.api.getVariantToTypeConstuctor(.OBJECT)
+        //construct(&ret, variant)
+        ret^ = 64
+    }else when T == ^Callable{
+        @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+        //if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.CALLABLE); fmt.println("int construct set")}
+        //construct := GDW.api.getVariantToTypeConstuctor(.CALLABLE)
+        //construct(&ret, variant)
+        ret^ = 64
+    }else when T == ^Signal{
+        @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+        //if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.SIGNAL); fmt.println("int construct set")}
+        //construct := GDW.api.getVariantToTypeConstuctor(.SIGNAL)
+        //construct(&ret, variant)
+        ret^ = 64
+    }else when T == ^Dictionary{
+        @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+        //if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.DICTIONARY); fmt.println("int construct set")}
+        //construct := GDW.api.getVariantToTypeConstuctor(.DICTIONARY)
+        //construct(&ret, variant)
+        ret^ = 64
+    }else when T == ^Array{
+        @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+        //if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.ARRAY); fmt.println("int construct set")}
+        //construct := GDW.api.getVariantToTypeConstuctor(.ARRAY)
+        //construct(&ret, variant)
+        ret^ = 64
+    } else
+    
+
+    /* typed arrays */
+    when T == ^PByteArray{
+        @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+        //if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.PACKED_BYTE_ARRAY); fmt.println("int construct set")}
+        //construct := GDW.api.getVariantToTypeConstuctor(.PACKED_BYTE_ARRAY)
+        //construct(&ret, variant)
+        ret^ = 64
+    }else when T == ^PI32Array{
+        @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+        //if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.PACKED_INT32_ARRAY); fmt.println("int construct set")}
+        //construct := GDW.api.getVariantToTypeConstuctor(.PACKED_INT32_ARRAY)
+        //construct(&ret, variant)
+        ret^ = 64
+    }else when T == ^Pi64Array{
+        @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+        //if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.PACKED_INT64_ARRAY); fmt.println("int construct set")}
+        //construct := GDW.api.getVariantToTypeConstuctor(.PACKED_INT64_ARRAY)
+        //construct(&ret, variant)
+        ret^ = 64
+    }else when T == ^Pf32Array{
+        @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+        //if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.PACKED_FLOAT32_ARRAY); fmt.println("int construct set")}
+        //construct := GDW.api.getVariantToTypeConstuctor(.PACKED_FLOAT32_ARRAY)
+        //construct(&ret, variant)
+        ret^ = 64
+    }else when T == ^Pf64Array{
+        @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+        //if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.PACKED_FLOAT64_ARRAY); fmt.println("int construct set")}
+        //construct := GDW.api.getVariantToTypeConstuctor(.PACKED_FLOAT64_ARRAY)
+        //construct(&ret, variant)
+        ret^ = 64
+    }else when T == ^PStringArray{
+        @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+        //if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.PACKED_STRING_ARRAY); fmt.println("int construct set")} //NOT ODIN STRING
+        //construct := GDW.api.getVariantToTypeConstuctor(.PACKED_STRING_ARRAY)
+        //construct(&ret, variant)
+        ret^ = 64
+    }else when T == ^PVector2Array{
+        @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+        //if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.PACKED_VECTOR2_ARRAY); fmt.println("int construct set")}
+        //construct := GDW.api.getVariantToTypeConstuctor(.PACKED_VECTOR2_ARRAY)
+        //construct(&ret, variant)
+        ret^ = 64
+    }else when T == ^PVector3Array{
+        @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+        //if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.PACKED_VECTOR3_ARRAY); fmt.println("int construct set")}
+        //construct := GDW.api.getVariantToTypeConstuctor(.PACKED_VECTOR3_ARRAY)
+        //construct(&ret, variant)
+        ret^ = 64
+    }else when T == ^PColorArray{
+        @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+        //if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.PACKED_COLOR_ARRAY); fmt.println("int construct set")}
+        //construct := GDW.api.getVariantToTypeConstuctor(.PACKED_COLOR_ARRAY)
+        //construct(&ret, variant)
+        ret^ = 64
+    }else when T == ^PVector4Array{
+        @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+        //if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.PACKED_VECTOR4_ARRAY); fmt.println("int construct set")}
+        //construct := GDW.api.getVariantToTypeConstuctor(.PACKED_VECTOR4_ARRAY)
+        //construct(&ret, variant)
+        ret^ = 64
+    } else when T == ^VARIANT_MAX{
+        @(static)construct: GDE.GDExtensionTypeFromVariantConstructorFunc
+        //if construct == nil {construct = GDW.api.getVariantToTypeConstuctor(.VARIANT_MAX); fmt.println("int construct set")}
+        //construct := GDW.api.getVariantToTypeConstuctor(.VARIANT_MAX)
+        //construct(&ret, variant)
+        ret^ = 64
+    }
+    return 
+}
+
+
+//These are going to be very fragile. If th enum changes order, the union will need to change to match it.
+//Reduces repetition on the GDW.api side, but might not be great long-term.
+typetoenum :: proc($U: typeid) -> GDE.GDExtensionVariantType {
+    return cast(GDE.GDExtensionVariantType)(sics.type_variant_index_of(typeUnion, U) + 1)
+}
+
+varToEnum :: proc(arg: $T) -> GDE.GDExtensionVariantType {
+    return cast(GDE.GDExtensionVariantType)(sics.type_variant_index_of(typeUnion, T) + 1)
 }
 
 GDExtensionCallErrorType :: enum {
@@ -105,9 +790,12 @@ GDExtensionCallErrorType :: enum {
 	GDEXTENSION_CALL_ERROR_METHOD_NOT_CONST, // Used for const call.
 }
 
-
-typeUnion :: union {
-    int, bool, i32, i64, ^GDExample, f32, f64, 
+//Godot only has 'int', so use GDE.Int or i64
+typeUnion :: union  {
+    bool,
+    GDE.Int,
+    f32,
+    GDE.gdstring,
 }
 
 
@@ -177,7 +865,7 @@ call_1float_arg_no_ret :: proc "c" (method_userdata: rawptr, p_instance: rawptr,
         return
     }
 
-    type : GDE.GDExtensionVariantType = api.variantGetType(p_args[0])
+    type : GDE.GDExtensionVariantType = GDW.api.variantGetType(p_args[0])
     if type != .FLOAT {
         r_error.error = .GDEXTENSION_CALL_ERROR_INVALID_ARGUMENT
         r_error.expected = i32(GDE.GDExtensionVariantType.FLOAT)
